@@ -5,8 +5,6 @@ import subprocess
 import threading
 import datetime
 import requests
-import json
-from urllib.parse import urlencode
 import configparser
 from pathlib import Path
 
@@ -15,11 +13,14 @@ class MusicDownloaderGUI:
         self.root = root
         self.root.title("Soulseek Music Downloader")
         self.root.geometry("1000x800")
+        
+        # Force dark mode
         self.dark_mode = True
-
-        # Load configuration
+        
+        # Initialize configuration
         self.config = configparser.ConfigParser()
         self.config_file = Path.home() / ".musicdownloader.ini"
+        self._ensure_config_exists()
         self.load_config()
 
         self.style = ttk.Style()
@@ -28,8 +29,8 @@ class MusicDownloaderGUI:
         self.create_widgets()
         self.animate_status()
 
-    def load_config(self):
-        """Load configuration from file or create default"""
+    def _ensure_config_exists(self):
+        """Create config file with all required keys if it doesn't exist"""
         if not self.config_file.exists():
             self.config['DEFAULT'] = {
                 'spotify_client_id': '',
@@ -41,46 +42,57 @@ class MusicDownloaderGUI:
                 'obscurity_threshold': '30',
                 'max_obscure_tracks': '30'
             }
-            self.save_config()
-        else:
-            self.config.read(self.config_file)
+            with open(self.config_file, 'w') as f:
+                self.config.write(f)
 
-    def save_config(self):
-        """Save configuration to file"""
-        with open(self.config_file, 'w') as f:
-            self.config.write(f)
+    def load_config(self):
+        """Load configuration from file"""
+        self.config.read(self.config_file)
 
     def set_theme(self):
-        bg_color = "#121212" if self.dark_mode else "#F0F0F0"
-        fg_color = "#FFFFFF" if self.dark_mode else "#000000"
-        entry_bg = "#1e1e1e" if self.dark_mode else "#FFFFFF"
-        btn_bg = "#1c1c1c" if self.dark_mode else "#E0E0E0"
-        hover_bg = "#333333" if self.dark_mode else "#D0D0D0"
+        # Dark theme colors
+        bg_color = "#121212"  # Main background
+        fg_color = "#FFFFFF"  # Text color
+        entry_bg = "#1e1e1e"  # Entry fields
+        btn_bg = "#1c1c1c"    # Buttons
+        hover_bg = "#333333"  # Button hover
+        accent_color = "#44ff44"  # Status animation
+        tab_bg = "#1e1e1e"    # Tab background
+        selected_tab_bg = "#121212"  # Selected tab
 
+        # Configure root window
         self.root.configure(bg=bg_color)
+        
+        # Style configuration
         self.style.theme_use('clam')
-        self.style.configure("TLabel", background=bg_color, foreground=fg_color, font=("Segoe UI", 10))
-        self.style.configure("TButton", background=btn_bg, foreground=fg_color, font=("Segoe UI", 10), relief="flat")
+        
+        # Main styles
+        self.style.configure(".", background=bg_color, foreground=fg_color, font=("Segoe UI", 10))
+        self.style.configure("TLabel", background=bg_color, foreground=fg_color)
+        self.style.configure("TButton", background=btn_bg, foreground=fg_color, relief="flat")
         self.style.map("TButton", background=[("active", hover_bg)], foreground=[("active", fg_color)])
-        self.style.configure("TEntry", fieldbackground=entry_bg, foreground=fg_color, background=entry_bg)
-        self.style.configure("TRadiobutton", background=bg_color, foreground=fg_color, font=("Segoe UI", 10))
-        self.style.configure("Dark.TFrame", background=bg_color)
-        self.style.configure("Dark.TEntry", fieldbackground=entry_bg, background=entry_bg, foreground=fg_color)
-        self.style.configure("TNotebook", background=bg_color)
-        self.style.configure("TNotebook.Tab", background=btn_bg, foreground=fg_color)
-        self.style.map("TNotebook.Tab", background=[("selected", bg_color)])
-
-    def toggle_theme(self):
-        self.dark_mode = not self.dark_mode
-        self.set_theme()
-        self.update_status_box_theme()
-        icon = "🌙" if self.dark_mode else "☀"
-        self.toggle_button.configure(text=icon + " Toggle Theme")
+        self.style.configure("TEntry", fieldbackground=entry_bg, foreground=fg_color, insertbackground=fg_color)
+        self.style.configure("TRadiobutton", background=bg_color, foreground=fg_color)
+        self.style.configure("TFrame", background=bg_color)
+        self.style.configure("TLabelframe", background=bg_color, foreground=fg_color)
+        self.style.configure("TLabelframe.Label", background=bg_color, foreground=fg_color)
+        self.style.configure("TNotebook", background=tab_bg)
+        self.style.configure("TNotebook.Tab", background=tab_bg, foreground=fg_color, padding=[10, 5])
+        self.style.map("TNotebook.Tab", background=[("selected", selected_tab_bg)])
+        
+        # Listbox style
+        self.style.element_create("Custom.Listbox.field", "from", "clam")
+        self.style.layout("Custom.Listbox", [
+            ('Custom.Listbox.field', {'sticky': 'nswe', 'children': [
+                ('Listbox', {'sticky': 'nswe'})
+            ]})
+        ])
+        self.style.configure("Custom.Listbox", background=entry_bg, foreground=fg_color)
 
     def create_widgets(self):
         # Create main container
         self.main_frame = ttk.Frame(self.root)
-        self.main_frame.pack(fill="both", expand=True, padx=10, pady=10)
+        self.main_frame.pack(fill="both", expand=True, padx=20, pady=20)
 
         # Create notebook for tabs
         self.notebook = ttk.Notebook(self.main_frame)
@@ -92,9 +104,10 @@ class MusicDownloaderGUI:
         self.create_settings_tab()
 
         # Status box at bottom
-        self.status_box = tk.Text(self.main_frame, height=10, wrap="word", relief="flat", font=("Consolas", 10))
-        self.status_box.pack(fill="x", padx=10, pady=(0, 10))
-        self.update_status_box_theme()
+        self.status_box = tk.Text(self.main_frame, height=10, wrap="word", relief="flat", 
+                                font=("Consolas", 10), bg="#1e1e1e", fg="#FFFFFF",
+                                insertbackground="#FFFFFF")
+        self.status_box.pack(fill="x", padx=20, pady=(0, 20))
 
     def create_download_tab(self):
         """Create the main download tab"""
@@ -111,7 +124,8 @@ class MusicDownloaderGUI:
             ("YouTube URL", "youtube"),
             ("CSV File", "csv"),
             ("Last.fm Recommended", "lastfm"),
-            ("Spotify Weekly", "weekly")
+            ("Spotify Weekly", "weekly"),
+            ("Obscure (Spotify)", "obscurify")
         ]
 
         for idx, (text, value) in enumerate(modes):
@@ -123,7 +137,7 @@ class MusicDownloaderGUI:
         input_frame.pack(fill="x", padx=5, pady=5)
 
         ttk.Label(input_frame, text="Input (Playlist ID/URL/CSV etc):").grid(row=0, column=0, sticky="w")
-        self.input_entry = ttk.Entry(input_frame, width=60, style="Dark.TEntry")
+        self.input_entry = ttk.Entry(input_frame, width=60)
         self.input_entry.grid(row=1, column=0, columnspan=2, sticky="we", pady=5)
 
         # Action buttons
@@ -132,9 +146,6 @@ class MusicDownloaderGUI:
 
         self.download_button = ttk.Button(btn_frame, text="▶ Download Songs", command=self.threaded_download)
         self.download_button.pack(side="left", padx=5)
-
-        self.toggle_button = ttk.Button(btn_frame, text="🌙 Toggle Theme", command=self.toggle_theme)
-        self.toggle_button.pack(side="right", padx=5)
 
     def create_obscurify_tab(self):
         """Create the Obscurify-specific tab"""
@@ -167,15 +178,14 @@ class MusicDownloaderGUI:
         list_frame = ttk.LabelFrame(tab, text="Preview", padding=10)
         list_frame.pack(fill="both", expand=True, padx=5, pady=5)
 
-        self.preview_list = tk.Listbox(list_frame, height=15, bg="#1e1e1e" if self.dark_mode else "white", 
-                                     fg="white" if self.dark_mode else "black")
+        self.preview_list = tk.Listbox(list_frame, height=15, bg="#1e1e1e", fg="white")
         self.preview_list.pack(fill="both", expand=True)
 
         # Download button
         btn_frame = ttk.Frame(tab)
         btn_frame.pack(fill="x", padx=5, pady=10)
         self.obscurify_download_button = ttk.Button(btn_frame, text="Download Obscure Tracks", 
-                                                  command=lambda: self.download_obscure_tracks())
+                                                  command=self.download_obscure_tracks)
         self.obscurify_download_button.pack()
 
     def create_settings_tab(self):
@@ -188,14 +198,14 @@ class MusicDownloaderGUI:
         path_frame.pack(fill="x", padx=5, pady=5)
 
         ttk.Label(path_frame, text="Download Folder:").grid(row=0, column=0, sticky="w")
-        self.music_dir_entry = ttk.Entry(path_frame, width=60, style="Dark.TEntry")
+        self.music_dir_entry = ttk.Entry(path_frame, width=60)
         self.music_dir_entry.insert(0, self.config['DEFAULT'].get('download_folder', ''))
         self.music_dir_entry.grid(row=1, column=0, columnspan=2, sticky="we", pady=5)
         browse_music_btn = ttk.Button(path_frame, text="Browse", command=self.browse_music_folder, width=10)
         browse_music_btn.grid(row=1, column=2, padx=5)
 
         ttk.Label(path_frame, text="sldl.exe Path:").grid(row=2, column=0, sticky="w")
-        self.slsk_path_entry = ttk.Entry(path_frame, width=60, style="Dark.TEntry")
+        self.slsk_path_entry = ttk.Entry(path_frame, width=60)
         self.slsk_path_entry.insert(0, self.config['DEFAULT'].get('sldl_path', ''))
         self.slsk_path_entry.grid(row=3, column=0, columnspan=2, sticky="we", pady=5)
         browse_sldl_btn = ttk.Button(path_frame, text="Browse", command=self.browse_sldl, width=10)
@@ -207,14 +217,14 @@ class MusicDownloaderGUI:
 
         # Spotify credentials
         ttk.Label(cred_frame, text="Spotify Client ID:").grid(row=0, column=0, sticky="w")
-        self.spotify_id_entry = ttk.Entry(cred_frame, width=30, style="Dark.TEntry")
+        self.spotify_id_entry = ttk.Entry(cred_frame, width=30)
         self.spotify_id_entry.insert(0, self.config['DEFAULT'].get('spotify_client_id', ''))
         self.spotify_id_entry.grid(row=1, column=0, sticky="w", pady=5)
 
         ttk.Label(cred_frame, text="Spotify Client Secret:").grid(row=2, column=0, sticky="w")
         self.spotify_secret_frame = ttk.Frame(cred_frame)
         self.spotify_secret_frame.grid(row=3, column=0, sticky="w", pady=5)
-        self.spotify_secret_entry = ttk.Entry(self.spotify_secret_frame, width=25, style="Dark.TEntry", show="*")
+        self.spotify_secret_entry = ttk.Entry(self.spotify_secret_frame, width=25, show="*")
         self.spotify_secret_entry.pack(side="left")
         self.spotify_secret_toggle = ttk.Button(
             self.spotify_secret_frame, 
@@ -227,14 +237,14 @@ class MusicDownloaderGUI:
 
         # Soulseek credentials
         ttk.Label(cred_frame, text="Soulseek Username:").grid(row=0, column=1, sticky="w", padx=(20, 0))
-        self.slsk_user_entry = ttk.Entry(cred_frame, width=30, style="Dark.TEntry")
+        self.slsk_user_entry = ttk.Entry(cred_frame, width=30)
         self.slsk_user_entry.insert(0, self.config['DEFAULT'].get('soulseek_username', ''))
         self.slsk_user_entry.grid(row=1, column=1, sticky="w", padx=(20, 0), pady=5)
 
         ttk.Label(cred_frame, text="Soulseek Password:").grid(row=2, column=1, sticky="w", padx=(20, 0))
         self.slsk_pass_frame = ttk.Frame(cred_frame)
         self.slsk_pass_frame.grid(row=3, column=1, sticky="w", padx=(20, 0), pady=5)
-        self.slsk_pass_entry = ttk.Entry(self.slsk_pass_frame, width=25, style="Dark.TEntry", show="*")
+        self.slsk_pass_entry = ttk.Entry(self.slsk_pass_frame, width=25, show="*")
         self.slsk_pass_entry.pack(side="left")
         self.slsk_pass_toggle = ttk.Button(
             self.slsk_pass_frame, 
@@ -270,14 +280,9 @@ class MusicDownloaderGUI:
         self.config['DEFAULT']['sldl_path'] = self.slsk_path_entry.get()
         self.config['DEFAULT']['obscurity_threshold'] = self.obscurity_threshold.get()
         self.config['DEFAULT']['max_obscure_tracks'] = self.max_obscure_tracks.get()
-        self.save_config()
+        with open(self.config_file, 'w') as f:
+            self.config.write(f)
         self.log("[INFO] Settings saved successfully.")
-
-    def update_status_box_theme(self):
-        if self.dark_mode:
-            self.status_box.configure(bg="#1e1e1e", fg="white", insertbackground="white")
-        else:
-            self.status_box.configure(bg="white", fg="black", insertbackground="black")
 
     def animate_status(self):
         self.status_box.tag_configure("animate", foreground="#44ff44")
@@ -355,36 +360,6 @@ class MusicDownloaderGUI:
         input_value = ", ".join(tracks)
         self.download_songs(mode="obscurify", input_value=input_value)
 
-    def fetch_spotify_weekly_tracks(self):
-        self.log("[INFO] Fetching Spotify Weekly (Discover + Radar)...")
-        token = self.get_spotify_token()
-        if not token:
-            self.log("[ERROR] Failed to get Spotify token.")
-            return []
-
-        try:
-            headers = {"Authorization": f"Bearer {token}"}
-            playlists = {
-                "Discover Weekly": "37i9dQZEVXcJZyENOWUFo7",
-                "Release Radar": "37i9dQZEVXbLRQDuF5jeBp"
-            }
-
-            songs = []
-            for name, playlist_id in playlists.items():
-                url = f"https://api.spotify.com/v1/playlists/{playlist_id}/tracks"
-                r = requests.get(url, headers=headers)
-                r.raise_for_status()
-                for item in r.json().get("items", []):
-                    track = item.get("track")
-                    if track:
-                        artist = track["artists"][0]["name"]
-                        title = track["name"]
-                        songs.append(f"{artist} - {title}")
-            return songs[:30]
-        except Exception as e:
-            self.log(f"[ERROR] Failed to fetch weekly tracks: {str(e)}")
-            return []
-
     def get_spotify_token(self):
         client_id = self.spotify_id_entry.get().strip()
         client_secret = self.spotify_secret_entry.get().strip()
@@ -437,12 +412,6 @@ class MusicDownloaderGUI:
                     self.log("ERROR: No obscure tracks found or failed to fetch.")
                     return
                 input_value = ", ".join(song_list)
-        elif mode == "weekly":
-            song_list = self.fetch_spotify_weekly_tracks()
-            if not song_list:
-                self.log("ERROR: No weekly tracks found or failed to fetch.")
-                return
-            input_value = ", ".join(song_list)
 
         # Create log directory if it doesn't exist
         log_dir = Path.home() / "musicdownloader_logs"
@@ -497,5 +466,8 @@ class MusicDownloaderGUI:
 
 if __name__ == "__main__":
     root = tk.Tk()
-    app = MusicDownloaderGUI(root)
-    root.mainloop()
+    try:
+        app = MusicDownloaderGUI(root)
+        root.mainloop()
+    except Exception as e:
+        messagebox.showerror("Error", f"Failed to start application: {str(e)}")
