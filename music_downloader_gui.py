@@ -1,473 +1,871 @@
-import os
-import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
+import customtkinter as ctk
 import subprocess
 import threading
-import datetime
+import os
+import json
+import webbrowser
+from tkinter import filedialog
 import requests
-import configparser
-from pathlib import Path
+import base64
+import time
+import re
+import csv
 
-class MusicDownloaderGUI:
-    def __init__(self, root):
-        self.root = root
-        self.root.title("Soulseek Music Downloader")
-        self.root.geometry("1000x800")
+# --- Configuration & Constants ---
+CONFIG_FILE = "config.json"
+SLDL_EXECUTABLE = "sldl.exe" # Make sure sldl.exe is in the same directory or in your PATH
+ABOUT_URL = "https://github.com/fiso64/slsk-batchdl"
+SLSK_URL = "https://www.slsknet.org/"
+SPOTIFY_TOKEN_URL = "https://accounts.spotify.com/api/token"
+SPOTIFY_API_URL = "https://api.spotify.com/v1"
+OBSCURIFY_RECOMMENDATIONS_URL = "https://obscurifymusic.com/recommendations"
+DEFAULT_DOWNLOAD_PATH = os.path.join(os.path.expanduser("~"), "Downloads", "slsk-batchdl")
+
+# --- UI Class ---
+
+class App(ctk.CTk):
+    """
+    A GUI application to download songs using slsk-batchdl.
+    """
+    def __init__(self):
+        super().__init__()
+
+        self.title("Soulseek Batch Downloader")
+        self.geometry("800x880") # Increased height to accommodate new field
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(2, weight=1)
+
+        # Apply dark mode theme
+        ctk.set_appearance_mode("dark")  # Set default to dark mode
+
+        # --- Frames ---
+        self.header_frame = ctk.CTkFrame(self)
+        self.header_frame.grid(row=0, column=0, padx=20, pady=10, sticky="ew")
+        self.header_frame.grid_columnconfigure(1, weight=1)
+
+        self.main_frame = ctk.CTkScrollableFrame(self)
+        self.main_frame.grid(row=2, column=0, padx=20, pady=10, sticky="nsew")
+        self.main_frame.grid_columnconfigure(0, weight=1)
+
+        self.footer_frame = ctk.CTkFrame(self)
+        self.footer_frame.grid(row=3, column=0, padx=20, pady=10, sticky="ew")
+        self.footer_frame.grid_columnconfigure(0, weight=1)
+        self.footer_frame.grid_columnconfigure(1, weight=1)
+
+        # --- Header Widgets ---
+        self.logo_label = ctk.CTkLabel(self.header_frame, text="Soulseek Downloader", font=ctk.CTkFont(size=24, weight="bold"))
+        self.logo_label.grid(row=0, column=0, padx=20, pady=10, sticky="w")
         
-        # Force dark mode
-        self.dark_mode = True
-        
-        # Initialize configuration
-        self.config = configparser.ConfigParser()
-        self.config_file = Path.home() / ".musicdownloader.ini"
-        self._ensure_config_exists()
-        self.load_config()
-
-        self.style = ttk.Style()
-        self.set_theme()
-
-        self.create_widgets()
-        self.animate_status()
-
-    def _ensure_config_exists(self):
-        """Create config file with all required keys if it doesn't exist"""
-        if not self.config_file.exists():
-            self.config['DEFAULT'] = {
-                'spotify_client_id': '',
-                'spotify_client_secret': '',
-                'soulseek_username': '',
-                'soulseek_password': '',
-                'download_folder': str(Path.home() / 'Music'),
-                'sldl_path': '',
-                'obscurity_threshold': '30',
-                'max_obscure_tracks': '30'
-            }
-            with open(self.config_file, 'w') as f:
-                self.config.write(f)
-
-    def load_config(self):
-        """Load configuration from file"""
-        self.config.read(self.config_file)
-
-    def set_theme(self):
-        # Dark theme colors
-        bg_color = "#121212"  # Main background
-        fg_color = "#FFFFFF"  # Text color
-        entry_bg = "#1e1e1e"  # Entry fields
-        btn_bg = "#1c1c1c"    # Buttons
-        hover_bg = "#333333"  # Button hover
-        accent_color = "#44ff44"  # Status animation
-        tab_bg = "#1e1e1e"    # Tab background
-        selected_tab_bg = "#121212"  # Selected tab
-
-        # Configure root window
-        self.root.configure(bg=bg_color)
-        
-        # Style configuration
-        self.style.theme_use('clam')
-        
-        # Main styles
-        self.style.configure(".", background=bg_color, foreground=fg_color, font=("Segoe UI", 10))
-        self.style.configure("TLabel", background=bg_color, foreground=fg_color)
-        self.style.configure("TButton", background=btn_bg, foreground=fg_color, relief="flat")
-        self.style.map("TButton", background=[("active", hover_bg)], foreground=[("active", fg_color)])
-        self.style.configure("TEntry", fieldbackground=entry_bg, foreground=fg_color, insertbackground=fg_color)
-        self.style.configure("TRadiobutton", background=bg_color, foreground=fg_color)
-        self.style.configure("TFrame", background=bg_color)
-        self.style.configure("TLabelframe", background=bg_color, foreground=fg_color)
-        self.style.configure("TLabelframe.Label", background=bg_color, foreground=fg_color)
-        self.style.configure("TNotebook", background=tab_bg)
-        self.style.configure("TNotebook.Tab", background=tab_bg, foreground=fg_color, padding=[10, 5])
-        self.style.map("TNotebook.Tab", background=[("selected", selected_tab_bg)])
-        
-        # Listbox style
-        self.style.element_create("Custom.Listbox.field", "from", "clam")
-        self.style.layout("Custom.Listbox", [
-            ('Custom.Listbox.field', {'sticky': 'nswe', 'children': [
-                ('Listbox', {'sticky': 'nswe'})
-            ]})
-        ])
-        self.style.configure("Custom.Listbox", background=entry_bg, foreground=fg_color)
-
-    def create_widgets(self):
-        # Create main container
-        self.main_frame = ttk.Frame(self.root)
-        self.main_frame.pack(fill="both", expand=True, padx=20, pady=20)
-
-        # Create notebook for tabs
-        self.notebook = ttk.Notebook(self.main_frame)
-        self.notebook.pack(fill="both", expand=True)
-
-        # Create tabs
-        self.create_download_tab()
-        self.create_obscurify_tab()
-        self.create_settings_tab()
-
-        # Status box at bottom
-        self.status_box = tk.Text(self.main_frame, height=10, wrap="word", relief="flat", 
-                                font=("Consolas", 10), bg="#1e1e1e", fg="#FFFFFF",
-                                insertbackground="#FFFFFF")
-        self.status_box.pack(fill="x", padx=20, pady=(0, 20))
-
-    def create_download_tab(self):
-        """Create the main download tab"""
-        tab = ttk.Frame(self.notebook)
-        self.notebook.add(tab, text="Download")
-
-        # Mode selection
-        mode_frame = ttk.LabelFrame(tab, text="Download Mode", padding=10)
-        mode_frame.pack(fill="x", padx=5, pady=5)
-
-        self.mode = tk.StringVar(value="spotify")
-        modes = [
-            ("Spotify Playlist", "spotify"),
-            ("YouTube URL", "youtube"),
-            ("CSV File", "csv"),
-            ("Last.fm Recommended", "lastfm"),
-            ("Spotify Weekly", "weekly"),
-            ("Obscure (Spotify)", "obscurify")
-        ]
-
-        for idx, (text, value) in enumerate(modes):
-            rb = ttk.Radiobutton(mode_frame, text=text, variable=self.mode, value=value)
-            rb.grid(row=idx, column=0, sticky="w", pady=2)
-
-        # Input section
-        input_frame = ttk.LabelFrame(tab, text="Input", padding=10)
-        input_frame.pack(fill="x", padx=5, pady=5)
-
-        ttk.Label(input_frame, text="Input (Playlist ID/URL/CSV etc):").grid(row=0, column=0, sticky="w")
-        self.input_entry = ttk.Entry(input_frame, width=60)
-        self.input_entry.grid(row=1, column=0, columnspan=2, sticky="we", pady=5)
-
-        # Action buttons
-        btn_frame = ttk.Frame(tab)
-        btn_frame.pack(fill="x", padx=5, pady=10)
-
-        self.download_button = ttk.Button(btn_frame, text="▶ Download Songs", command=self.threaded_download)
-        self.download_button.pack(side="left", padx=5)
-
-    def create_obscurify_tab(self):
-        """Create the Obscurify-specific tab"""
-        tab = ttk.Frame(self.notebook)
-        self.notebook.add(tab, text="Obscurify")
-
-        # Settings frame
-        settings_frame = ttk.LabelFrame(tab, text="Obscurify Settings", padding=10)
-        settings_frame.pack(fill="x", padx=5, pady=5)
-
-        # Obscurity threshold
-        ttk.Label(settings_frame, text="Obscurity Threshold (0-100, lower is more obscure):").grid(row=0, column=0, sticky="w")
-        self.obscurity_threshold = tk.StringVar(value=self.config['DEFAULT'].get('obscurity_threshold', '30'))
-        threshold_entry = ttk.Entry(settings_frame, textvariable=self.obscurity_threshold, width=5)
-        threshold_entry.grid(row=0, column=1, sticky="w", padx=5)
-
-        # Max tracks to fetch
-        ttk.Label(settings_frame, text="Maximum tracks to fetch:").grid(row=1, column=0, sticky="w")
-        self.max_obscure_tracks = tk.StringVar(value=self.config['DEFAULT'].get('max_obscure_tracks', '30'))
-        max_tracks_entry = ttk.Entry(settings_frame, textvariable=self.max_obscure_tracks, width=5)
-        max_tracks_entry.grid(row=1, column=1, sticky="w", padx=5)
-
-        # Preview button
-        preview_frame = ttk.Frame(settings_frame)
-        preview_frame.grid(row=2, column=0, columnspan=2, pady=10)
-        self.preview_button = ttk.Button(preview_frame, text="Preview Obscure Tracks", command=self.preview_obscure_tracks)
-        self.preview_button.pack(side="left", padx=5)
-
-        # Preview list
-        list_frame = ttk.LabelFrame(tab, text="Preview", padding=10)
-        list_frame.pack(fill="both", expand=True, padx=5, pady=5)
-
-        self.preview_list = tk.Listbox(list_frame, height=15, bg="#1e1e1e", fg="white")
-        self.preview_list.pack(fill="both", expand=True)
-
-        # Download button
-        btn_frame = ttk.Frame(tab)
-        btn_frame.pack(fill="x", padx=5, pady=10)
-        self.obscurify_download_button = ttk.Button(btn_frame, text="Download Obscure Tracks", 
-                                                  command=self.download_obscure_tracks)
-        self.obscurify_download_button.pack()
-
-    def create_settings_tab(self):
-        """Create the settings tab"""
-        tab = ttk.Frame(self.notebook)
-        self.notebook.add(tab, text="Settings")
-
-        # Path settings
-        path_frame = ttk.LabelFrame(tab, text="Paths", padding=10)
-        path_frame.pack(fill="x", padx=5, pady=5)
-
-        ttk.Label(path_frame, text="Download Folder:").grid(row=0, column=0, sticky="w")
-        self.music_dir_entry = ttk.Entry(path_frame, width=60)
-        self.music_dir_entry.insert(0, self.config['DEFAULT'].get('download_folder', ''))
-        self.music_dir_entry.grid(row=1, column=0, columnspan=2, sticky="we", pady=5)
-        browse_music_btn = ttk.Button(path_frame, text="Browse", command=self.browse_music_folder, width=10)
-        browse_music_btn.grid(row=1, column=2, padx=5)
-
-        ttk.Label(path_frame, text="sldl.exe Path:").grid(row=2, column=0, sticky="w")
-        self.slsk_path_entry = ttk.Entry(path_frame, width=60)
-        self.slsk_path_entry.insert(0, self.config['DEFAULT'].get('sldl_path', ''))
-        self.slsk_path_entry.grid(row=3, column=0, columnspan=2, sticky="we", pady=5)
-        browse_sldl_btn = ttk.Button(path_frame, text="Browse", command=self.browse_sldl, width=10)
-        browse_sldl_btn.grid(row=3, column=2, padx=5)
-
-        # Credentials frame
-        cred_frame = ttk.LabelFrame(tab, text="Credentials", padding=10)
-        cred_frame.pack(fill="x", padx=5, pady=5)
-
-        # Spotify credentials
-        ttk.Label(cred_frame, text="Spotify Client ID:").grid(row=0, column=0, sticky="w")
-        self.spotify_id_entry = ttk.Entry(cred_frame, width=30)
-        self.spotify_id_entry.insert(0, self.config['DEFAULT'].get('spotify_client_id', ''))
-        self.spotify_id_entry.grid(row=1, column=0, sticky="w", pady=5)
-
-        ttk.Label(cred_frame, text="Spotify Client Secret:").grid(row=2, column=0, sticky="w")
-        self.spotify_secret_frame = ttk.Frame(cred_frame)
-        self.spotify_secret_frame.grid(row=3, column=0, sticky="w", pady=5)
-        self.spotify_secret_entry = ttk.Entry(self.spotify_secret_frame, width=25, show="*")
-        self.spotify_secret_entry.pack(side="left")
-        self.spotify_secret_toggle = ttk.Button(
-            self.spotify_secret_frame, 
-            text="👁", 
-            width=3,
-            command=lambda: self.toggle_password_visibility(self.spotify_secret_entry, self.spotify_secret_toggle)
+        self.dark_mode_switch_var = ctk.StringVar(value="on")
+        self.dark_mode_switch = ctk.CTkSwitch(
+            self.header_frame,
+            text="Dark Mode",
+            command=self.toggle_dark_mode,
+            variable=self.dark_mode_switch_var,
+            onvalue="on",
+            offvalue="off"
         )
-        self.spotify_secret_toggle.pack(side="left", padx=5)
-        self.spotify_secret_entry.insert(0, self.config['DEFAULT'].get('spotify_client_secret', ''))
+        self.dark_mode_switch.grid(row=0, column=2, padx=20, pady=10, sticky="e")
+        
+        self.about_button = ctk.CTkButton(self.header_frame, text="About slsk-batchdl", command=self.open_about)
+        self.about_button.grid(row=0, column=3, padx=10, pady=10, sticky="e")
+        
+        self.slsk_button = ctk.CTkButton(self.header_frame, text="Get Soulseek", command=self.open_slsk)
+        self.slsk_button.grid(row=0, column=4, padx=20, pady=10, sticky="e")
 
-        # Soulseek credentials
-        ttk.Label(cred_frame, text="Soulseek Username:").grid(row=0, column=1, sticky="w", padx=(20, 0))
-        self.slsk_user_entry = ttk.Entry(cred_frame, width=30)
-        self.slsk_user_entry.insert(0, self.config['DEFAULT'].get('soulseek_username', ''))
-        self.slsk_user_entry.grid(row=1, column=1, sticky="w", padx=(20, 0), pady=5)
+        # --- Main Widgets (Input & Options) ---
+        self.create_input_section()
+        self.create_credentials_section()
+        self.create_download_options_section()
+        self.create_search_options_section()
+        self.create_spotify_options_section()
+        self.create_output_frame()
 
-        ttk.Label(cred_frame, text="Soulseek Password:").grid(row=2, column=1, sticky="w", padx=(20, 0))
-        self.slsk_pass_frame = ttk.Frame(cred_frame)
-        self.slsk_pass_frame.grid(row=3, column=1, sticky="w", padx=(20, 0), pady=5)
-        self.slsk_pass_entry = ttk.Entry(self.slsk_pass_frame, width=25, show="*")
-        self.slsk_pass_entry.pack(side="left")
-        self.slsk_pass_toggle = ttk.Button(
-            self.slsk_pass_frame, 
-            text="👁", 
-            width=3,
-            command=lambda: self.toggle_password_visibility(self.slsk_pass_entry, self.slsk_pass_toggle)
+        # --- Footer Widgets ---
+        self.download_button = ctk.CTkButton(self.footer_frame, text="Start Download", command=self.start_download, height=50, font=ctk.CTkFont(size=20, weight="bold"))
+        self.download_button.grid(row=0, column=0, padx=20, pady=20, sticky="ew")
+
+        self.status_label = ctk.CTkLabel(self.footer_frame, text="Status: Ready", font=ctk.CTkFont(size=14))
+        self.status_label.grid(row=1, column=0, columnspan=2, padx=20, pady=5, sticky="w")
+        
+        self.load_credentials()
+        
+        # --- New: Lists to store download status ---
+        self.all_queries = []
+        self.downloaded_queries = set()
+        self.failed_downloads = []
+
+    def create_input_section(self):
+        """Creates the section for the input URL/path."""
+        input_frame = ctk.CTkFrame(self.main_frame, fg_color="transparent")
+        input_frame.grid(row=0, column=0, sticky="ew", padx=1.5, pady=10)
+        input_frame.grid_columnconfigure(1, weight=1)
+
+        input_label = ctk.CTkLabel(input_frame, text="Input (URL or Path):")
+        input_label.grid(row=0, column=0, padx=10, pady=5, sticky="w")
+        self.input_entry = ctk.CTkEntry(input_frame, placeholder_text="e.g., https://open.spotify.com/playlist/... or C:/obscurify_listening.csv")
+        self.input_entry.grid(row=0, column=1, padx=10, pady=5, sticky="ew")
+
+        input_type_label = ctk.CTkLabel(input_frame, text="Input Type:")
+        input_type_label.grid(row=1, column=0, padx=10, pady=5, sticky="w")
+        self.input_type_optionmenu = ctk.CTkOptionMenu(
+            input_frame,
+            values=["auto", "csv", "youtube", "spotify", "bandcamp", "string", "list"]
         )
-        self.slsk_pass_toggle.pack(side="left", padx=5)
-        self.slsk_pass_entry.insert(0, self.config['DEFAULT'].get('soulseek_password', ''))
+        self.input_type_optionmenu.set("auto")
+        self.input_type_optionmenu.grid(row=1, column=1, padx=10, pady=5, sticky="ew")
 
-        # Save button
-        btn_frame = ttk.Frame(tab)
-        btn_frame.pack(fill="x", padx=5, pady=10)
-        self.save_button = ttk.Button(btn_frame, text="💾 Save Settings", command=self.save_settings)
-        self.save_button.pack()
+    def create_credentials_section(self):
+        """Creates the section for Soulseek credentials."""
+        credentials_frame = ctk.CTkFrame(self.main_frame)
+        credentials_frame.grid(row=1, column=0, sticky="ew", padx=10, pady=10)
+        credentials_frame.grid_columnconfigure(1, weight=1)
 
-    def toggle_password_visibility(self, entry, toggle_button):
-        """Toggle password visibility between hidden and visible"""
-        if entry['show'] == "*":
-            entry.config(show="")
-            toggle_button.config(text="🙈")
+        credentials_label = ctk.CTkLabel(credentials_frame, text="Soulseek Credentials", font=ctk.CTkFont(size=16, weight="bold"))
+        credentials_label.grid(row=0, column=0, columnspan=2, padx=10, pady=10, sticky="w")
+
+        username_label = ctk.CTkLabel(credentials_frame, text="Username:")
+        username_label.grid(row=1, column=0, padx=10, pady=5, sticky="w")
+        self.username_entry = ctk.CTkEntry(credentials_frame)
+        self.username_entry.grid(row=1, column=1, padx=10, pady=5, sticky="ew")
+
+        password_label = ctk.CTkLabel(credentials_frame, text="Password:")
+        password_label.grid(row=2, column=0, padx=10, pady=5, sticky="w")
+        self.password_entry = ctk.CTkEntry(credentials_frame, show="*")
+        self.password_entry.grid(row=2, column=1, padx=10, pady=5, sticky="ew")
+        
+    def create_download_options_section(self):
+        """Creates the section for general download options."""
+        options_frame = ctk.CTkFrame(self.main_frame)
+        options_frame.grid(row=2, column=0, sticky="ew", padx=10, pady=10)
+        options_frame.grid_columnconfigure(1, weight=1)
+        options_frame.grid_columnconfigure(3, weight=1)
+
+        options_label = ctk.CTkLabel(options_frame, text="Download Options", font=ctk.CTkFont(size=16, weight="bold"))
+        options_label.grid(row=0, column=0, columnspan=4, padx=10, pady=10, sticky="w")
+
+        path_label = ctk.CTkLabel(options_frame, text="Download Path:")
+        path_label.grid(row=1, column=0, padx=10, pady=5, sticky="w")
+        self.path_entry = ctk.CTkEntry(options_frame, placeholder_text=f"e.g., {DEFAULT_DOWNLOAD_PATH}")
+        self.path_entry.grid(row=1, column=1, columnspan=2, padx=10, pady=5, sticky="ew")
+        
+        # New Browse button
+        browse_button = ctk.CTkButton(options_frame, text="Browse", width=80, command=self.browse_download_path)
+        browse_button.grid(row=1, column=3, padx=10, pady=5, sticky="e")
+        
+        # Row 2
+        number_label = ctk.CTkLabel(options_frame, text="Max Tracks:")
+        number_label.grid(row=2, column=0, padx=10, pady=5, sticky="w")
+        self.number_entry = ctk.CTkEntry(options_frame, placeholder_text="all")
+        self.number_entry.grid(row=2, column=1, padx=10, pady=5, sticky="ew")
+        
+        offset_label = ctk.CTkLabel(options_frame, text="Offset:")
+        offset_label.grid(row=2, column=2, padx=10, pady=5, sticky="w")
+        self.offset_entry = ctk.CTkEntry(options_frame, placeholder_text="0")
+        self.offset_entry.grid(row=2, column=3, padx=10, pady=5, sticky="ew")
+        
+        # Row 3
+        self.reverse_checkbox = ctk.CTkCheckBox(options_frame, text="Reverse Order")
+        self.reverse_checkbox.grid(row=3, column=0, padx=10, pady=5, sticky="w")
+        
+        self.write_playlist_checkbox = ctk.CTkCheckBox(options_frame, text="Write M3U Playlist")
+        self.write_playlist_checkbox.grid(row=3, column=1, padx=10, pady=5, sticky="w")
+
+        self.no_skip_existing_checkbox = ctk.CTkCheckBox(options_frame, text="No Skip Existing")
+        self.no_skip_existing_checkbox.grid(row=3, column=2, padx=10, pady=5, sticky="w")
+        
+        # Row 4 (New)
+        listen_port_label = ctk.CTkLabel(options_frame, text="Listen Port:")
+        listen_port_label.grid(row=4, column=0, padx=10, pady=5, sticky="w")
+        self.listen_port_entry = ctk.CTkEntry(options_frame, placeholder_text="49998 (default)")
+        self.listen_port_entry.grid(row=4, column=1, padx=10, pady=5, sticky="ew")
+
+    def create_search_options_section(self):
+        """Creates the section for search-related options."""
+        search_frame = ctk.CTkFrame(self.main_frame)
+        search_frame.grid(row=3, column=0, sticky="ew", padx=10, pady=10)
+        search_frame.grid_columnconfigure(1, weight=1)
+        search_frame.grid_columnconfigure(3, weight=1)
+
+        search_label = ctk.CTkLabel(search_frame, text="Search & File Conditions", font=ctk.CTkFont(size=16, weight="bold"))
+        search_label.grid(row=0, column=0, columnspan=4, padx=10, pady=10, sticky="w")
+        
+        # Row 1 (New search format options)
+        search_format_label = ctk.CTkLabel(search_frame, text="Search Query Format:")
+        search_format_label.grid(row=1, column=0, padx=10, pady=5, sticky="w")
+        # Updated placeholder to a simpler format
+        self.search_format_entry = ctk.CTkEntry(search_frame, placeholder_text="{artist} {title}")
+        self.search_format_entry.grid(row=1, column=1, columnspan=2, padx=10, pady=5, sticky="ew")
+        
+        # Helper checkbox for vague search
+        self.vague_search_checkbox = ctk.CTkCheckBox(search_frame, text="Simple query (artist keywords)", command=self.set_vague_search_format)
+        self.vague_search_checkbox.grid(row=1, column=3, padx=10, pady=5, sticky="w")
+        
+        # Row 2
+        self.fast_search_checkbox = ctk.CTkCheckBox(search_frame, text="Fast Search")
+        self.fast_search_checkbox.grid(row=2, column=0, padx=10, pady=5, sticky="w")
+        
+        self.desperate_checkbox = ctk.CTkCheckBox(search_frame, text="Desperate Search")
+        self.desperate_checkbox.grid(row=2, column=1, padx=10, pady=5, sticky="w")
+        
+        self.yt_dlp_checkbox = ctk.CTkCheckBox(search_frame, text="Use yt-dlp as fallback")
+        self.yt_dlp_checkbox.grid(row=2, column=2, padx=10, pady=5, sticky="w")
+        
+        # Row 3 (Bitrate)
+        min_bitrate_label = ctk.CTkLabel(search_frame, text="Min Bitrate:")
+        min_bitrate_label.grid(row=3, column=0, padx=10, pady=5, sticky="w")
+        self.min_bitrate_entry = ctk.CTkEntry(search_frame, placeholder_text="200")
+        self.min_bitrate_entry.grid(row=3, column=1, padx=10, pady=5, sticky="ew")
+
+        max_bitrate_label = ctk.CTkLabel(search_frame, text="Max Bitrate:")
+        max_bitrate_label.grid(row=3, column=2, padx=10, pady=5, sticky="w")
+        self.max_bitrate_entry = ctk.CTkEntry(search_frame, placeholder_text="2500")
+        self.max_bitrate_entry.grid(row=3, column=3, padx=10, pady=5, sticky="ew")
+        
+        # Row 4 (Formats)
+        pref_format_label = ctk.CTkLabel(search_frame, text="Preferred Formats:")
+        pref_format_label.grid(row=4, column=0, padx=10, pady=5, sticky="w")
+        self.pref_format_entry = ctk.CTkEntry(search_frame, placeholder_text="flac")
+        self.pref_format_entry.grid(row=4, column=1, padx=10, pady=5, sticky="ew")
+        
+        format_label = ctk.CTkLabel(search_frame, text="Accepted Formats:")
+        format_label.grid(row=4, column=2, padx=10, pady=5, sticky="w")
+        self.format_entry = ctk.CTkEntry(search_frame, placeholder_text="flac,mp3")
+        self.format_entry.grid(row=4, column=3, padx=10, pady=5, sticky="ew")
+
+    def set_vague_search_format(self):
+        """Sets a vague search format if the checkbox is selected."""
+        if self.vague_search_checkbox.get() == 1:
+            self.search_format_entry.delete(0, ctk.END)
+            self.search_format_entry.insert(0, "{artist} {title}")
+            self.update_status("Search query format set to '{artist} {title}'", "blue")
         else:
-            entry.config(show="*")
-            toggle_button.config(text="👁")
+            self.search_format_entry.delete(0, ctk.END)
+            self.update_status("Search query format reset.", "blue")
 
-    def save_settings(self):
-        """Save all settings to config file"""
-        self.config['DEFAULT']['spotify_client_id'] = self.spotify_id_entry.get()
-        self.config['DEFAULT']['spotify_client_secret'] = self.spotify_secret_entry.get()
-        self.config['DEFAULT']['soulseek_username'] = self.slsk_user_entry.get()
-        self.config['DEFAULT']['soulseek_password'] = self.slsk_pass_entry.get()
-        self.config['DEFAULT']['download_folder'] = self.music_dir_entry.get()
-        self.config['DEFAULT']['sldl_path'] = self.slsk_path_entry.get()
-        self.config['DEFAULT']['obscurity_threshold'] = self.obscurity_threshold.get()
-        self.config['DEFAULT']['max_obscure_tracks'] = self.max_obscure_tracks.get()
-        with open(self.config_file, 'w') as f:
-            self.config.write(f)
-        self.log("[INFO] Settings saved successfully.")
+    def create_spotify_options_section(self):
+        """Creates the section for Spotify credentials."""
+        spotify_frame = ctk.CTkFrame(self.main_frame)
+        spotify_frame.grid(row=4, column=0, sticky="ew", padx=10, pady=10)
+        spotify_frame.grid_columnconfigure(1, weight=1)
+        spotify_frame.grid_columnconfigure(3, weight=1)
 
-    def animate_status(self):
-        self.status_box.tag_configure("animate", foreground="#44ff44")
-        self.status_box.after(500, self._animate_cursor)
-
-    def _animate_cursor(self):
-        self.status_box.insert(tk.END, ".", "animate")
-        self.status_box.see(tk.END)
-        self.status_box.after(1000, self._animate_cursor)
-
-    def browse_music_folder(self):
-        folder_selected = filedialog.askdirectory(title="Select Music Download Folder")
-        if folder_selected:
-            self.music_dir_entry.delete(0, tk.END)
-            self.music_dir_entry.insert(0, folder_selected)
-
-    def browse_sldl(self):
-        file_selected = filedialog.askopenfilename(title="Select sldl.exe", filetypes=[("Executable Files", "*.exe")])
-        if file_selected:
-            self.slsk_path_entry.delete(0, tk.END)
-            self.slsk_path_entry.insert(0, file_selected)
-
-    def threaded_download(self):
-        threading.Thread(target=self.download_songs, daemon=True).start()
-
-    def log(self, message):
-        timestamp = datetime.datetime.now().strftime("[%Y-%m-%d %H:%M:%S] ")
-        self.status_box.insert(tk.END, timestamp + message + "\n")
-        self.status_box.see(tk.END)
-
-    def fetch_obscure_spotify_tracks(self):
-        self.log("[INFO] Fetching obscure Spotify tracks...")
-        token = self.get_spotify_token()
-        if not token:
-            self.log("[ERROR] Failed to get Spotify token.")
-            return []
+        spotify_label = ctk.CTkLabel(spotify_frame, text="Spotify Credentials & Options", font=ctk.CTkFont(size=16, weight="bold"))
+        spotify_label.grid(row=0, column=0, columnspan=4, padx=10, pady=10, sticky="w")
         
+        # Row 1
+        id_label = ctk.CTkLabel(spotify_frame, text="Client ID:")
+        id_label.grid(row=1, column=0, padx=10, pady=5, sticky="w")
+        self.spotify_id_entry = ctk.CTkEntry(spotify_frame)
+        self.spotify_id_entry.grid(row=1, column=1, padx=10, pady=5, sticky="ew")
+        
+        secret_label = ctk.CTkLabel(spotify_frame, text="Client Secret:")
+        secret_label.grid(row=1, column=2, padx=10, pady=5, sticky="w")
+        self.spotify_secret_entry = ctk.CTkEntry(spotify_frame, show="*")
+        self.spotify_secret_entry.grid(row=1, column=3, padx=10, pady=5, sticky="ew")
+        
+        # Row 2 (Optional for refresh token flow)
+        refresh_label = ctk.CTkLabel(spotify_frame, text="Refresh Token:")
+        refresh_label.grid(row=2, column=0, padx=10, pady=5, sticky="w")
+        self.spotify_refresh_entry = ctk.CTkEntry(spotify_frame)
+        self.spotify_refresh_entry.grid(row=2, column=1, columnspan=3, padx=10, pady=5, sticky="ew")
+        
+        # Save button for credentials in this frame
+        save_credentials_button = ctk.CTkButton(spotify_frame, text="Save All Credentials", command=self.save_credentials)
+        save_credentials_button.grid(row=3, column=3, padx=10, pady=10, sticky="e")
+        
+        # Row 4 (Obscurify & other options)
+        self.remove_from_source_checkbox = ctk.CTkCheckBox(spotify_frame, text="Remove downloaded tracks from playlist")
+        self.remove_from_source_checkbox.grid(row=4, column=0, columnspan=4, padx=10, pady=5, sticky="w")
+        
+        obscurify_label = ctk.CTkLabel(spotify_frame, text="Obscurify Daily Download", font=ctk.CTkFont(size=14, weight="bold"))
+        obscurify_label.grid(row=5, column=0, padx=10, pady=10, sticky="w")
+        
+        # --- CORRECTED INSTRUCTIONS ---
+        obscurify_info_label = ctk.CTkLabel(spotify_frame, text="1. Click the button to open your recommendations page.\n2. On the website, click 'Create a playlist on Spotify'.\n3. Copy the URL of the new Spotify playlist and paste it into the input field above.\n4. Select 'spotify' as the input type to download the songs.", wraplength=550, justify="left")
+        obscurify_info_label.grid(row=6, column=0, columnspan=3, padx=10, pady=5, sticky="w")
+
+        # --- Obscurify Recommendations button ---
+        self.obscurify_button = ctk.CTkButton(spotify_frame, text="Open Obscurify Recommendations", command=self.open_obscurify_recommendations)
+        self.obscurify_button.grid(row=6, column=3, padx=10, pady=5, sticky="e")
+
+
+    def create_output_frame(self):
+        """Creates the frame for the console output."""
+        output_frame = ctk.CTkFrame(self.main_frame)
+        output_frame.grid(row=5, column=0, sticky="nsew", padx=10, pady=10)
+        output_frame.grid_columnconfigure(0, weight=1)
+        output_frame.grid_rowconfigure(0, weight=1)
+
+        output_label = ctk.CTkLabel(output_frame, text="Log Output", font=ctk.CTkFont(size=16, weight="bold"))
+        output_label.grid(row=0, column=0, padx=10, pady=5, sticky="w")
+        
+        self.output_text = ctk.CTkTextbox(output_frame, height=200)
+        self.output_text.grid(row=1, column=0, padx=10, pady=10, sticky="nsew")
+        self.output_text.configure(state="disabled") # Make it read-only
+        
+        output_frame.grid_rowconfigure(1, weight=1)
+
+    def toggle_dark_mode(self):
+        """Toggles between dark and light mode."""
+        if self.dark_mode_switch_var.get() == "on":
+            ctk.set_appearance_mode("dark")
+        else:
+            ctk.set_appearance_mode("light")
+
+    def browse_download_path(self):
+        """Opens a file dialog to select the download folder and updates the entry field."""
+        folder_selected = filedialog.askdirectory()
+        if folder_selected: # If a folder was selected (not cancelled)
+            self.path_entry.delete(0, ctk.END) # Clear the current entry
+            self.path_entry.insert(0, folder_selected) # Insert the selected path
+            self.update_status(f"Download path set to: {folder_selected}", "blue")
+
+    def save_credentials(self):
+        """Saves Soulseek and Spotify credentials to a JSON file."""
+        config_data = {
+            "soulseek_username": self.username_entry.get(),
+            "soulseek_password": self.password_entry.get(),
+            "spotify_id": self.spotify_id_entry.get(),
+            "spotify_secret": self.spotify_secret_entry.get(),
+            "spotify_refresh": self.spotify_refresh_entry.get(),
+            "download_path": self.path_entry.get(),
+            "listen_port": self.listen_port_entry.get(),
+            "preferred_format": self.pref_format_entry.get(),
+            "accepted_format": self.format_entry.get(),
+            "search_format": self.search_format_entry.get()
+        }
         try:
-            threshold = int(self.obscurity_threshold.get())
-            max_tracks = int(self.max_obscure_tracks.get())
-            
-            headers = {"Authorization": f"Bearer {token}"}
-            response = requests.get("https://api.spotify.com/v1/me/top/tracks?limit=50", headers=headers)
-            response.raise_for_status()
-            tracks = response.json().get("items", [])
-            obscure = [
-                f"{t['artists'][0]['name']} - {t['name']}" 
-                for t in tracks 
-                if t['popularity'] <= threshold
-            ]
-            return obscure[:max_tracks]
+            with open(CONFIG_FILE, "w") as f:
+                json.dump(config_data, f, indent=4)
+            self.update_status("Credentials and settings saved successfully!", "green")
         except Exception as e:
-            self.log(f"[ERROR] Failed to fetch obscure tracks: {str(e)}")
-            return []
+            self.update_status(f"Error saving credentials: {e}", "red")
 
-    def preview_obscure_tracks(self):
-        """Fetch and display obscure tracks in the preview list"""
-        self.preview_list.delete(0, tk.END)
-        tracks = self.fetch_obscure_spotify_tracks()
-        if not tracks:
-            self.log("[ERROR] No obscure tracks found or failed to fetch.")
-            return
-        
-        for track in tracks:
-            self.preview_list.insert(tk.END, track)
-        self.log(f"[INFO] Found {len(tracks)} obscure tracks")
+    def load_credentials(self):
+        """Loads credentials from the JSON file if it exists."""
+        if os.path.exists(CONFIG_FILE):
+            try:
+                with open(CONFIG_FILE, "r") as f:
+                    config_data = json.load(f)
+                    self.username_entry.insert(0, config_data.get("soulseek_username", ""))
+                    self.password_entry.insert(0, config_data.get("soulseek_password", ""))
+                    self.spotify_id_entry.insert(0, config_data.get("spotify_id", ""))
+                    self.spotify_secret_entry.insert(0, config_data.get("spotify_secret", ""))
+                    self.spotify_refresh_entry.insert(0, config_data.get("spotify_refresh", ""))
+                    self.path_entry.insert(0, config_data.get("download_path", ""))
+                    self.pref_format_entry.insert(0, config_data.get("preferred_format", "flac")) 
+                    self.format_entry.insert(0, config_data.get("accepted_format", "flac,mp3"))
+                    self.listen_port_entry.insert(0, config_data.get("listen_port", ""))
+                    self.search_format_entry.insert(0, config_data.get("search_format", ""))
+                self.update_status("Credentials loaded from config file.", "blue")
+            except Exception as e:
+                self.update_status(f"Error loading credentials: {e}", "red")
 
-    def download_obscure_tracks(self):
-        """Download the tracks shown in the preview list"""
-        tracks = [self.preview_list.get(i) for i in range(self.preview_list.size())]
-        if not tracks:
-            self.log("[ERROR] No tracks to download. Please preview first.")
-            return
-        
-        input_value = ", ".join(tracks)
-        self.download_songs(mode="obscurify", input_value=input_value)
+    def open_obscurify_recommendations(self):
+        """Opens the Obscurify recommendations page in the user's browser."""
+        self.update_status("Opening Obscurify recommendations page... Please create a Spotify playlist from there.", "blue")
+        webbrowser.open(OBSCURIFY_RECOMMENDATIONS_URL)
 
-    def get_spotify_token(self):
-        client_id = self.spotify_id_entry.get().strip()
-        client_secret = self.spotify_secret_entry.get().strip()
-        
+    def get_spotify_access_token(self):
+        """
+        Retrieves a Spotify access token using Refresh Token Flow or Client Credentials Flow.
+        """
+        client_id = self.spotify_id_entry.get()
+        client_secret = self.spotify_secret_entry.get()
+        refresh_token = self.spotify_refresh_entry.get()
+
         if not client_id or not client_secret:
-            self.log("[ERROR] Spotify credentials not configured")
+            self.print_to_output("Error: Spotify Client ID and Secret are required for Spotify input.", "red")
             return None
+            
+        headers = {
+            "Content-Type": "application/x-www-form-urlencoded"
+        }
 
-        try:
-            data = {
-                'grant_type': 'client_credentials',
-                'client_id': client_id,
-                'client_secret': client_secret
+        # First, try to use the Refresh Token
+        if refresh_token:
+            payload = {
+                "grant_type": "refresh_token",
+                "refresh_token": refresh_token
             }
-            r = requests.post('https://accounts.spotify.com/api/token', data=data)
-            r.raise_for_status()
-            return r.json().get('access_token')
-        except Exception as e:
-            self.log(f"[ERROR] Spotify auth error: {str(e)}")
+            auth_string = f"{client_id}:{client_secret}"
+            auth_bytes = auth_string.encode("utf-8")
+            auth_base64 = base64.b64encode(auth_bytes).decode("utf-8")
+            headers["Authorization"] = f"Basic {auth_base64}"
+
+            self.print_to_output("Attempting to get Spotify token using Refresh Token...", "blue")
+            try:
+                response = requests.post(SPOTIFY_TOKEN_URL, data=payload, headers=headers)
+                response.raise_for_status() # This will raise an HTTPError for bad responses
+                token_info = response.json()
+                return token_info.get("access_token")
+            except requests.exceptions.RequestException as e:
+                self.print_to_output(f"Failed to get token with Refresh Token: {e}", "red")
+                if hasattr(e, 'response') and e.response is not None:
+                    self.print_to_output(f"Spotify API Response: {e.response.text}", "red")
+                self.print_to_output("Falling back to Client Credentials Flow...", "yellow")
+        
+        # If no refresh token or the refresh token failed, use Client Credentials flow
+        payload = {
+            "grant_type": "client_credentials"
+        }
+        auth_string = f"{client_id}:{client_secret}"
+        auth_bytes = auth_string.encode("utf-8")
+        auth_base64 = base64.b64encode(auth_bytes).decode("utf-8")
+        headers["Authorization"] = f"Basic {auth_base64}"
+
+        self.print_to_output("Attempting to get Spotify token using Client Credentials...", "blue")
+        try:
+            response = requests.post(SPOTIFY_TOKEN_URL, data=payload, headers=headers)
+            response.raise_for_status()
+            token_info = response.json()
+            return token_info.get("access_token")
+        except requests.exceptions.RequestException as e:
+            self.print_to_output(f"Failed to get token with Client Credentials: {e}", "red")
+            if hasattr(e, 'response') and e.response is not None:
+                self.print_to_output(f"Spotify API Response: {e.response.text}", "red")
             return None
 
-    def download_songs(self, mode=None, input_value=None):
-        if mode is None:
-            mode = self.mode.get()
-        if input_value is None:
-            input_value = self.input_entry.get().strip()
-        
-        music_dir = self.music_dir_entry.get().strip()
-        slsk_path = self.slsk_path_entry.get().strip()
-        slsk_user = self.slsk_user_entry.get().strip()
-        slsk_pass = self.slsk_pass_entry.get().strip()
-
-        # Validate inputs
-        if not slsk_path or not os.path.isfile(slsk_path):
-            self.log("ERROR: sldl.exe not found or not specified.")
-            return
-        if not music_dir or not os.path.isdir(music_dir):
-            self.log("ERROR: Download folder not found or not specified.")
-            return
-        if not slsk_user or not slsk_pass:
-            self.log("ERROR: Soulseek credentials not specified.")
-            return
-
-        if mode == "spotify" and "playlist/" in input_value:
-            input_value = input_value.split("playlist/")[-1].split("?")[0]
-        elif mode == "obscurify":
-            if not input_value:
-                song_list = self.fetch_obscure_spotify_tracks()
-                if not song_list:
-                    self.log("ERROR: No obscure tracks found or failed to fetch.")
-                    return
-                input_value = ", ".join(song_list)
-
-        # Create log directory if it doesn't exist
-        log_dir = Path.home() / "musicdownloader_logs"
-        log_dir.mkdir(exist_ok=True)
-        log_file = log_dir / f"download_log_{datetime.date.today()}.txt"
-
-        command = [
-            slsk_path,
-            input_value,
-            "--user", slsk_user,
-            "--pass", slsk_pass,
-            "--path", music_dir,
-            "--pref-format", "flac,mp3",
-            "--name-format", "{artist}/{album}/{title}.{ext}",
-            "--write-playlist",
-            "--log-file", str(log_file)
-        ]
-
-        self.log("Starting download process...")
+    def get_spotify_playlist_details(self, playlist_id, access_token):
+        """
+        Fetches details (like name) for a Spotify playlist.
+        """
+        url = f"{SPOTIFY_API_URL}/playlists/{playlist_id}"
+        headers = {"Authorization": f"Bearer {access_token}"}
         try:
+            response = requests.get(url, headers=headers)
+            response.raise_for_status()
+            data = response.json()
+            return data.get("name")
+        except requests.exceptions.RequestException as e:
+            self.print_to_output(f"Error fetching Spotify playlist details: {e}", "red")
+            return None
+
+    def get_spotify_playlist_tracks(self, playlist_id, access_token):
+        """
+        Fetches tracks from a Spotify playlist.
+        """
+        tracks = []
+        next_url = f"{SPOTIFY_API_URL}/playlists/{playlist_id}/tracks"
+        headers = {
+            "Authorization": f"Bearer {access_token}"
+        }
+
+        while next_url:
+            self.print_to_output(f"Fetching tracks from: {next_url}...", "blue")
+            try:
+                response = requests.get(next_url, headers=headers)
+                response.raise_for_status()
+                data = response.json()
+                
+                for item in data['items']:
+                    track = item['track']
+                    if track and track['artists']:
+                        artist_names = [artist['name'] for artist in track['artists']]
+                        tracks.append({
+                            'title': track['name'],
+                            'artist': ", ".join(artist_names),
+                            'album': track['album']['name']
+                        })
+                
+                next_url = data['next']
+            except requests.exceptions.RequestException as e:
+                self.print_to_output(f"Error fetching Spotify playlist tracks: {e}", "red")
+                if hasattr(e, 'response') and e.response is not None:
+                    self.print_to_output(f"Spotify API Response: {e.response.text}", "red")
+                return None
+        return tracks
+
+    def process_obscurify_csv(self, file_path):
+        """
+        Reads a CSV from Obscurify and extracts artist and track information.
+        """
+        tracks = []
+        try:
+            with open(file_path, mode='r', encoding='utf-8') as f:
+                # Use DictReader which is more robust if column order changes
+                reader = csv.DictReader(f)
+                
+                # Check for expected headers (case-insensitive)
+                headers = [header.lower() for header in reader.fieldnames]
+                if 'track name' not in headers or 'artist name(s)' not in headers:
+                    self.print_to_output("Error: CSV must contain 'Track Name' and 'Artist Name(s)' columns.", "red")
+                    return None
+                    
+                # Map headers to the correct case from the file
+                track_name_key = next((h for h in reader.fieldnames if h.lower() == 'track name'), None)
+                artist_name_key = next((h for h in reader.fieldnames if h.lower() == 'artist name(s)'), None)
+                
+                for row in reader:
+                    tracks.append({
+                        'title': row.get(track_name_key, ''),
+                        'artist': row.get(artist_name_key, ''),
+                        'album': '' # Obscurify CSV doesn't have album info
+                    })
+            self.print_to_output(f"Successfully loaded {len(tracks)} tracks from the CSV.", "green")
+            return tracks
+        except FileNotFoundError:
+            self.print_to_output(f"Error: CSV file not found at '{file_path}'.", "red")
+            return None
+        except Exception as e:
+            self.print_to_output(f"Error processing CSV file: {e}", "red")
+            return None
+
+    def sanitize_filename(self, name):
+        """
+        Removes invalid characters from a string to make it a valid filename/folder name.
+        """
+        # Replace characters that are not letters, numbers, spaces, hyphens, or underscores with an empty string
+        sanitized = re.sub(r'[\\/:*?"<>|]', '', name)
+        # Trim leading/trailing whitespace
+        sanitized = sanitized.strip()
+        return sanitized
+        
+    def start_download(self):
+        """
+        Starts the download process in a separate thread to prevent the GUI from freezing.
+        Handles Spotify URLs by pre-processing them.
+        """
+        input_value = self.input_entry.get()
+        if not input_value:
+            self.update_status("Please provide a Spotify URL or file path.", "red")
+            return
+        
+        # --- New: Reset download status lists before a new download ---
+        self.all_queries = []
+        self.downloaded_queries = set()
+        self.failed_downloads = []
+
+        self.output_text.delete("1.0", ctk.END) # Clear the log
+        self.update_status("Starting download...", "yellow")
+        self.download_button.configure(state="disabled", text="Downloading...")
+        
+        # Create a thread to handle both pre-processing and the subprocess
+        download_thread = threading.Thread(target=self.prepare_and_run_download, args=(input_value,))
+        download_thread.start()
+
+    def prepare_and_run_download(self, input_value):
+        """
+        Determines the input type and prepares the input for sldl.exe.
+        """
+        temp_file_path = None
+        
+        # Get the base download path, use default if empty
+        base_download_path = self.path_entry.get() if self.path_entry.get() else DEFAULT_DOWNLOAD_PATH
+        
+        # Determine the input type based on the user's selection and input value
+        selected_input_type = self.input_type_optionmenu.get()
+        
+        if selected_input_type == "auto":
+            if "open.spotify.com" in input_value:
+                final_input_type = "spotify"
+            elif input_value.lower().endswith(('.csv')):
+                final_input_type = "csv"
+            elif input_value.lower().endswith(('.txt')):
+                final_input_type = "list"
+            elif "youtube.com" in input_value or "youtu.be" in input_value:
+                final_input_type = "youtube"
+            else:
+                # Let sldl.exe figure out a direct string search
+                final_input_type = "string"
+                
+            self.print_to_output(f"Input type 'auto' resolved to '{final_input_type}'.", "blue")
+        else:
+            final_input_type = selected_input_type
+
+        try:
+            # --- New logic for dynamic playlist/source folder name ---
+            dynamic_download_path = base_download_path
+            
+            if final_input_type == "spotify":
+                self.print_to_output("Detected Spotify URL. Fetching tracks...", "blue")
+                
+                # Extract playlist ID from the URL
+                parts = input_value.split('/')
+                playlist_id = parts[-1].split('?')[0]
+                
+                # Get Access Token
+                access_token = self.get_spotify_access_token()
+                if not access_token:
+                    self.update_status("Failed to get Spotify token. Check credentials.", "red")
+                    return
+                
+                # --- NEW: Get playlist name to create a folder ---
+                playlist_name = self.get_spotify_playlist_details(playlist_id, access_token)
+                if playlist_name:
+                    sanitized_name = self.sanitize_filename(playlist_name)
+                    dynamic_download_path = os.path.join(base_download_path, sanitized_name)
+                    self.print_to_output(f"Creating download folder: {dynamic_download_path}", "blue")
+
+                # Fetch tracks from Spotify
+                tracks = self.get_spotify_playlist_tracks(playlist_id, access_token)
+                if not tracks:
+                    self.update_status("Failed to fetch tracks from the Spotify playlist.", "red")
+                    return
+                
+                # If a custom search format is specified, create a temp file
+                if self.search_format_entry.get():
+                    temp_file_path = self.generate_query_file(tracks, self.search_format_entry.get())
+                    final_input = temp_file_path
+                    final_input_type = "list"
+                else:
+                    final_input = input_value # Pass the URL directly to sldl.exe
+            
+            # --- NEW: Logic for Obscurify CSV input ---
+            elif final_input_type == "csv":
+                self.print_to_output("Detected Obscurify CSV file. Processing...", "blue")
+                # Get a list of tracks from the CSV
+                tracks = self.process_obscurify_csv(input_value)
+                if not tracks:
+                    self.update_status("Failed to process the CSV file.", "red")
+                    return
+                
+                # Create a temp file with formatted queries from the CSV data
+                search_format = self.search_format_entry.get() if self.search_format_entry.get() else "{artist} {title}"
+                temp_file_path = self.generate_query_file(tracks, search_format)
+                final_input = temp_file_path
+                final_input_type = "list"
+                
+                # --- NEW: Use CSV filename for folder name ---
+                csv_name = os.path.splitext(os.path.basename(input_value))[0]
+                sanitized_name = self.sanitize_filename(csv_name)
+                dynamic_download_path = os.path.join(base_download_path, sanitized_name)
+                self.print_to_output(f"Creating download folder: {dynamic_download_path}", "blue")
+
+            else:
+                # If not Spotify or CSV, use the original input
+                final_input = input_value
+                dynamic_download_path = base_download_path # Use the base path
+                
+                # If it's a direct search string or single input, store it.
+                if final_input_type in ["string", "bandcamp", "youtube"]:
+                    self.all_queries.append(final_input)
+
+            # Now, run the download command with the prepared input and dynamic path
+            self.run_download_command(final_input, final_input_type, dynamic_download_path)
+
+        except Exception as e:
+            self.update_status(f"An error occurred during pre-processing: {e}", "red")
+        finally:
+            # Clean up the temporary file
+            if temp_file_path and os.path.exists(temp_file_path):
+                try:
+                    os.remove(temp_file_path)
+                    self.print_to_output(f"Cleaned up temporary file: {temp_file_path}", "blue")
+                except OSError as e:
+                    self.print_to_output(f"Error cleaning up temporary file: {e}", "red")
+            
+            # --- New: Display a summary of missing songs after the download finishes ---
+            self.display_download_summary()
+
+    def generate_query_file(self, tracks, search_format):
+        """
+        Generates a temporary file with formatted search queries.
+        """
+        temp_file_path = "temp_queries.txt"
+        with open(temp_file_path, "w", encoding="utf-8") as f:
+            for track in tracks:
+                query = search_format.format(artist=track['artist'], title=track['title'], album=track['album'])
+                
+                # Store the original query to track it later
+                self.all_queries.append(query)
+                
+                # Remove any double quotes from the query string to prevent parsing issues
+                cleaned_query = query.replace('"', '')
+                
+                # Wrap the cleaned query in double quotes
+                quoted_query = f'"{cleaned_query}"'
+                
+                self.print_to_output(f"Generated query: {quoted_query}", "grey")
+                f.write(quoted_query + "\n")
+        return temp_file_path
+
+    def run_download_command(self, input_value, input_type, download_path):
+        """
+        Builds and executes the sldl.exe command in a subprocess.
+        """
+        try:
+            command = [SLDL_EXECUTABLE]
+            
+            # --- Build the command based on user inputs ---
+            command.extend(["--input", input_value])
+            
+            # Only add the input type if it's not 'auto'
+            if input_type != "auto":
+                command.extend(["--input-type", input_type])
+            
+            user = self.username_entry.get()
+            if user:
+                command.extend(["--user", user])
+            
+            password = self.password_entry.get()
+            if password:
+                command.extend(["--pass", password])
+            
+            # --- Use the dynamically determined download path ---
+            if download_path:
+                command.extend(["--path", download_path])
+            
+            if self.number_entry.get():
+                command.extend(["--number", self.number_entry.get()])
+                
+            if self.offset_entry.get():
+                command.extend(["--offset", self.offset_entry.get()])
+
+            if self.reverse_checkbox.get() == 1:
+                command.append("--reverse")
+            
+            if self.write_playlist_checkbox.get() == 1:
+                command.append("--write-playlist")
+                
+            if self.no_skip_existing_checkbox.get() == 1:
+                command.append("--no-skip-existing")
+            
+            # Search options
+            if self.fast_search_checkbox.get() == 1:
+                command.append("--fast-search")
+            
+            if self.desperate_checkbox.get() == 1:
+                command.append("--desperate")
+            
+            if self.yt_dlp_checkbox.get() == 1:
+                command.append("--yt-dlp")
+            
+            if self.min_bitrate_entry.get():
+                command.extend(["--min-bitrate", self.min_bitrate_entry.get()])
+            
+            if self.max_bitrate_entry.get():
+                command.extend(["--max-bitrate", self.max_bitrate_entry.get()])
+                
+            # Add preferred and accepted formats
+            if self.pref_format_entry.get():
+                command.extend(["--pref-format", self.pref_format_entry.get()])
+                
+            if self.format_entry.get():
+                command.extend(["--format", self.format_entry.get()])
+            
+            listen_port = self.listen_port_entry.get()
+            if listen_port and listen_port.isdigit():
+                command.extend(["--listen-port", listen_port])
+
+            # Spotify options are now handled by the GUI to fetch the data
+            # so we don't need to pass them to slsk-batchdl unless it's a direct Spotify input
+            if input_type == "spotify":
+                if self.spotify_id_entry.get():
+                    command.extend(["--spotify-id", self.spotify_id_entry.get()])
+                if self.spotify_secret_entry.get():
+                    command.extend(["--spotify-secret", self.spotify_secret_entry.get()])
+                
+                if self.remove_from_source_checkbox.get() == 1:
+                    command.append("--remove-from-source")
+            
+            self.print_to_output(f"Executing command: {' '.join(command)}\n", "blue")
+            
             process = subprocess.Popen(
                 command,
                 stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
                 text=True,
+                encoding='utf-8',
+                errors='replace',
                 bufsize=1,
-                universal_newlines=True
+                creationflags=subprocess.CREATE_NO_WINDOW
             )
 
-            # Stream output in real-time
-            while True:
-                output = process.stdout.readline()
-                if output == '' and process.poll() is not None:
-                    break
-                if output:
-                    self.log(output.strip())
+            # --- Process output line by line to track downloads ---
+            for line in process.stdout:
+                # Check for successful download patterns
+                line_stripped = line.strip()
+                if line_stripped.startswith("Downloaded:") or line_stripped.startswith("Skipped existing:"):
+                    # Extract the filename and try to match it to a query
+                    parts = line_stripped.split(':')
+                    if len(parts) > 1:
+                        filename_with_ext = parts[1].strip()
+                        cleaned_filename = os.path.splitext(filename_with_ext)[0]
+                        
+                        # Find the corresponding query in our list (case-insensitive)
+                        for original_query in self.all_queries:
+                            if cleaned_filename.lower() in original_query.lower():
+                                self.downloaded_queries.add(original_query)
+                                break
+                elif "No files found for" in line_stripped:
+                    try:
+                        query_start = line_stripped.find("'") + 1
+                        query_end = line_stripped.rfind("'")
+                        failed_query = line_stripped[query_start:query_end]
+                        # Only add to failed_downloads if it hasn't been downloaded/skipped
+                        if failed_query not in self.downloaded_queries:
+                            self.failed_downloads.append((failed_query, "No files found"))
+                    except IndexError:
+                        pass
+                
+                self.after(0, self.print_to_output, line)
+                
+            process.wait()
             
-            stderr = process.stderr.read()
-            if stderr:
-                self.log(f"[ERROR] {stderr.strip()}")
-
             if process.returncode == 0:
-                self.log("Download completed successfully.")
+                self.update_status("Download finished successfully!", "green")
             else:
-                self.log(f"Download failed with return code {process.returncode}")
+                self.update_status(f"Download failed with exit code {process.returncode}.", "red")
 
+        except FileNotFoundError:
+            self.update_status(f"Error: Could not find '{SLDL_EXECUTABLE}'. Make sure it's in the same directory or in your system's PATH.", "red")
         except Exception as e:
-            self.log(f"Exception occurred: {str(e)}")
+            self.update_status(f"An error occurred: {e}", "red")
         finally:
-            self.log(f"Download process completed. Files saved to: {music_dir}")
-            self.log(f"Log file saved to: {log_file}")
+            self.download_button.configure(state="normal", text="Start Download")
+
+    def display_download_summary(self):
+        """
+        Displays a summary of downloaded vs. non-downloaded songs.
+        """
+        self.print_to_output("\n" + "="*50, "white")
+        self.print_to_output("DOWNLOAD SUMMARY", "white")
+        self.print_to_output("="*50 + "\n", "white")
+
+        # Use a set difference for efficient comparison
+        all_queries_set = set(self.all_queries)
+        not_downloaded_set = all_queries_set - self.downloaded_queries
+
+        if not_downloaded_set:
+            self.print_to_output(f"Failed to find or download {len(not_downloaded_set)} out of {len(self.all_queries)} songs:", "red")
+            
+            # Create a dictionary to map failed queries to reasons
+            failed_queries_with_reasons = {query: reason for query, reason in self.failed_downloads}
+            
+            for query in sorted(list(not_downloaded_set)):
+                reason = failed_queries_with_reasons.get(query, "Unknown reason (e.g., download failed, file too small, etc.).")
+                self.print_to_output(f"  - {query} (Reason: {reason})", "red")
+                
+        else:
+            self.print_to_output(f"All {len(self.all_queries)} songs were successfully downloaded or skipped!", "green")
+
+        self.print_to_output("\n" + "="*50 + "\n", "white")
+
+    def print_to_output(self, text, color=None):
+        """
+        Appends text to the output textbox.
+        """
+        self.output_text.configure(state="normal")
+        self.output_text.insert(ctk.END, text)
+        self.output_text.see(ctk.END)
+        self.output_text.configure(state="disabled")
+
+    def update_status(self, message, color="white"):
+        """
+        Updates the status label in the footer.
+        """
+        self.status_label.configure(text=f"Status: {message}", text_color=color)
+        
+    def open_about(self):
+        """Opens the slsk-batchdl GitHub page in a web browser."""
+        webbrowser.open(ABOUT_URL)
+        
+    def open_slsk(self):
+        """Opens the Soulseek website in a web browser."""
+        webbrowser.open(SLSK_URL)
 
 if __name__ == "__main__":
-    root = tk.Tk()
-    try:
-        app = MusicDownloaderGUI(root)
-        root.mainloop()
-    except Exception as e:
-        messagebox.showerror("Error", f"Failed to start application: {str(e)}")
+    app = App()
+    app.mainloop()
